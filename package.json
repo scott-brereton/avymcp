@@ -1,0 +1,25 @@
+{
+  "name": "avymcp",
+  "version": "1.0.0",
+  "description": "MCP server for avalanche forecasts, danger ratings, and observations worldwide",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "types": "wrangler types"
+  },
+  "keywords": ["mcp", "avalanche", "forecast", "backcountry"],
+  "author": "",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "agents": "^0.10.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260409.1",
+    "typescript": "^6.0.2",
+    "wrangler": "^4.81.1"
+  }
+}
