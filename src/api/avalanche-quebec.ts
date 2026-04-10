@@ -26,6 +26,64 @@ const URLS = {
 } as const;
 
 /**
+ * Error thrown when the bulletin page loads but its structure no longer
+ * matches what the parser expects. Callers MUST surface this to the user as a
+ * hard failure rather than rendering a partial forecast — a half-parsed
+ * bulletin is exactly the kind of gap an LLM might fill with fabrication.
+ */
+export class QuebecParseError extends Error {
+  readonly sourceUrl: string;
+  readonly details: string[];
+
+  constructor(message: string, sourceUrl: string, details: string[] = []) {
+    super(message);
+    this.name = "QuebecParseError";
+    this.sourceUrl = sourceUrl;
+    this.details = details;
+  }
+}
+
+/**
+ * Anchor strings that MUST be present in a valid bulletin page. Used both as
+ * an off-season detector and as a structural integrity check — if the page
+ * has been redesigned these anchors will vanish and we fail fast instead of
+ * returning empty fields.
+ *
+ * Each anchor is a regex so we can tolerate whitespace and tag variations.
+ */
+const REQUIRED_ANCHORS: Record<"en" | "fr", RegExp[]> = {
+  en: [
+    /Avalanche Bulletin/i,
+    /Areas covered by the bulletin/i,
+    /Date issued/i,
+    /Valid until/i,
+    /Prepared by/i,
+    /Danger ratings/i,
+    /Alpine/i,
+    /Treeline/i,
+    /Below Treeline/i,
+  ],
+  fr: [
+    /Bulletin d['’]avalanche/i,
+    /Zones couvertes par le bulletin/i,
+    /Publié le/i,
+    /Valide jusqu/i,
+    /Préparé par/i,
+    /Indices de danger/i,
+    /Alpin/i,
+    /forestière/i,
+  ],
+};
+
+/** Valid danger rating labels per language. Used to verify parsed cells. */
+const VALID_DANGER_LABELS: Record<"en" | "fr", Set<string>> = {
+  en: new Set(["Low", "Moderate", "Considerable", "High", "Extreme"]),
+  fr: new Set(["Faible", "Modéré", "Considérable", "Élevé", "Extrême"]),
+};
+
+const DANGER_CELL_RE = /^([1-5])\s*-\s*(.+)$/;
+
+/**
  * Bounding box for the Chic-Chocs forecast region (Gaspésie, Québec).
  * Used to quickly check whether a lat/lon request falls inside AvQc's area.
  * Generous box covering all 8 sub-zones from Murdochville west to Cap-Chat.
@@ -271,13 +329,106 @@ function parseConfidenceBlock(html: string): {
 }
 
 /**
+ * Verify the fetched HTML still matches the structure this parser was built
+ * for. Returns the list of missing anchors (empty = healthy).
+ */
+function checkIntegrity(html: string, lang: "en" | "fr"): string[] {
+  return REQUIRED_ANCHORS[lang]
+    .filter((re) => !re.test(html))
+    .map((re) => re.source);
+}
+
+/**
+ * Validate a parsed forecast against required fields. Returns a list of
+ * human-readable failure reasons (empty = valid).
+ */
+function validateForecast(fc: QuebecForecast): string[] {
+  const errors: string[] = [];
+
+  if (!fc.dateIssued) errors.push("missing dateIssued");
+  if (!fc.validUntil) errors.push("missing validUntil");
+  if (!fc.forecaster) errors.push("missing forecaster");
+  if (fc.areas.length === 0) errors.push("no areas covered parsed");
+
+  if (fc.dangerDays.length === 0) {
+    errors.push("no danger-rating days parsed");
+  } else if (fc.dangerDays.length > 5) {
+    errors.push(`too many danger days (${fc.dangerDays.length}) — layout probably changed`);
+  }
+
+  const validLabels = VALID_DANGER_LABELS[fc.language];
+  for (const day of fc.dangerDays) {
+    if (!day.day) errors.push("danger day with no label");
+    for (const [band, val] of [
+      ["alpine", day.alpine],
+      ["treeline", day.treeline],
+      ["belowTreeline", day.belowTreeline],
+    ] as const) {
+      if (!val) {
+        errors.push(`${day.day || "day"}/${band}: empty rating`);
+        continue;
+      }
+      const m = val.match(DANGER_CELL_RE);
+      if (!m) {
+        errors.push(`${day.day}/${band}: rating "${val}" does not match "N - Label"`);
+        continue;
+      }
+      if (!validLabels.has(m[2].trim())) {
+        errors.push(
+          `${day.day}/${band}: unknown danger label "${m[2]}" (expected one of ${[...validLabels].join("/")})`,
+        );
+      }
+    }
+  }
+
+  // Problems are allowed to be zero (low-danger bulletins sometimes list
+  // none), but if any are parsed they must have a type.
+  for (let i = 0; i < fc.problems.length; i++) {
+    if (!fc.problems[i].type) errors.push(`problem #${i + 1}: missing type`);
+  }
+
+  return errors;
+}
+
+/**
  * Fetch and parse the current Avalanche Québec bulletin.
- * Returns null if the bulletin page has no active forecast (off-season).
+ *
+ * Return values:
+ *   - QuebecForecast   — parsed and validated bulletin
+ *   - null             — page loaded but contains no active forecast (off-season)
+ *
+ * Throws:
+ *   - QuebecParseError — page structure no longer matches what we expect.
+ *                        Callers MUST surface this as an explicit failure so
+ *                        downstream LLMs do not hallucinate missing fields.
  */
 export async function getQuebecForecast(
   lang: "en" | "fr" = "en",
 ): Promise<QuebecForecast | null> {
   const html = await fetchHTML(URLS[lang]);
+
+  // Off-season detection: the bulletin page keeps its layout year-round but
+  // the "Date issued" / "Publié le" line is absent outside the Dec 1 – Apr 30
+  // window. If that marker AND the danger table are both missing, we treat
+  // the response as off-season rather than a parser failure.
+  const hasIssueDate = lang === "en"
+    ? /Date issued/i.test(html)
+    : /Publié le/i.test(html);
+  const hasDangerTable = /<table[\s\S]*?<tbody[\s\S]*?<\/tbody>[\s\S]*?<\/table>/i.test(html);
+  if (!hasIssueDate && !hasDangerTable) {
+    return null;
+  }
+
+  // Structural integrity check. If the page has been redesigned this will
+  // catch it before we start picking through empty matches.
+  const missing = checkIntegrity(html, lang);
+  if (missing.length > 0) {
+    throw new QuebecParseError(
+      "Avalanche Québec bulletin page structure has changed; the scraper can no longer reliably extract fields",
+      URLS[lang],
+      missing.map((a) => `missing anchor: /${a}/`),
+    );
+  }
 
   // The <h4> right after the title holds the bulletin "highlights" tagline.
   // It's wrapped in a <p> inside an <h4> (yes, really).
@@ -311,12 +462,6 @@ export async function getQuebecForecast(
   const firstTableMatch = html.match(/<table[^>]*>[\s\S]*?<\/table>/i);
   const dangerDays = firstTableMatch ? parseDangerTable(firstTableMatch[0]) : [];
 
-  // If there's no danger table we're probably off-season. Return null so the
-  // tool can emit a helpful message rather than an empty-looking forecast.
-  if (dangerDays.length === 0) {
-    return null;
-  }
-
   // Travel advice <ul> directly after "Travel advice" / "Conseils..."
   const travelAdviceRaw = html.match(
     /<strong>\s*(?:Travel advice|Conseils sur le terrain(?:[^<]*))\s*:?\s*<\/strong>\s*<\/p>\s*<ul[^>]*>([\s\S]*?)<\/ul>/i,
@@ -343,7 +488,7 @@ export async function getQuebecForecast(
   );
   const confidence = parseConfidenceBlock(html);
 
-  return {
+  const forecast: QuebecForecast = {
     language: lang,
     sourceUrl: URLS[lang],
     title: lang === "fr" ? "Bulletin d'avalanche" : "Avalanche Bulletin",
@@ -351,7 +496,7 @@ export async function getQuebecForecast(
     areas,
     dateIssued: dateIssued ?? "",
     validUntil: validUntil ?? "",
-    forecaster: forecaster ?? "Avalanche Québec",
+    forecaster: forecaster ?? "",
     dangerDays,
     travelAdvice,
     problems,
@@ -360,4 +505,18 @@ export async function getQuebecForecast(
     weatherSummary,
     confidence,
   };
+
+  // Post-parse validation. Any failure here means the scraper produced a
+  // partially-populated forecast — we refuse to return it to avoid feeding
+  // a half-empty bulletin to an LLM that might fill the gaps with guesses.
+  const errors = validateForecast(forecast);
+  if (errors.length > 0) {
+    throw new QuebecParseError(
+      "Avalanche Québec bulletin parsed but failed validation; some fields are missing or malformed",
+      URLS[lang],
+      errors,
+    );
+  }
+
+  return forecast;
 }
