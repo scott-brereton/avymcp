@@ -1,6 +1,6 @@
 # avymcp
 
-MCP server for avalanche forecasts, danger ratings, and field observations. Covers all 28 US avalanche centers via [avalanche.org](https://avalanche.org) and Canadian regions via [Avalanche Canada](https://avalanche.ca).
+MCP server for avalanche forecasts, danger ratings, and field observations. Covers all 28 US avalanche centers via [avalanche.org](https://avalanche.org), Canadian regions via [Avalanche Canada](https://avalanche.ca), and the Chic-Chocs (Gaspésie, Québec) via [Avalanche Québec](https://avalanchequebec.ca).
 
 Deployed on Cloudflare Workers. No API keys required -- all upstream data sources are public.
 
@@ -171,6 +171,25 @@ Returns danger ratings for 3 days across Alpine/Treeline/Below Treeline, avalanc
 - "What's the avalanche forecast near Whistler?"
 - "Avalanche conditions at Rogers Pass, BC"
 
+---
+
+### get_quebec_forecast
+
+Get the current Avalanche Québec bulletin for the Chic-Chocs in Gaspésie. This region is NOT covered by the Avalanche Canada API, so it has its own tool. Covers Mont Albert, Mont Ernest-Laforce, Mont Hog's Back, Champs-de-Mars, Mont Lyall, Mont Vallières-de-Saint-Réal, Mont Blanche-Lamontagne, and Mines-Madeleine. Bulletins are issued daily December 1 – April 30.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `language` | string | no | "en" (default) or "fr" |
+| `latitude` | number | no | Optional lat for a sanity check that the point is in the Chic-Chocs |
+| `longitude` | number | no | Optional lon for a sanity check that the point is in the Chic-Chocs |
+
+Returns 3-day danger ratings across Alpine/Treeline/Below Treeline, avalanche problems (type, aspect, elevation, likelihood, size), travel advice, and avalanche/snowpack/weather summaries.
+
+**Example prompts:**
+- "What's the avalanche forecast for Mont Albert?"
+- "Conditions in the Chic-Chocs today"
+- "Get me the French bulletin for Gaspésie"
+
 ## Data Sources
 
 | Source | Coverage | Auth |
@@ -178,6 +197,7 @@ Returns danger ratings for 3 days across Alpine/Treeline/Below Treeline, avalanc
 | [Avalanche.org API](https://github.com/NationalAvalancheCenter/Avalanche.org-Public-API-Docs) | 28 US centers, 82 zones | None |
 | [Avalanche.org Observations API](https://avalanche.org) | Field reports from all US centers | Referer header |
 | [Avalanche Canada API](https://avalanche.ca) | All Canadian forecast regions | None |
+| [Avalanche Québec](https://avalanchequebec.ca) | Chic-Chocs, Gaspésie, Québec | None (HTML scrape) |
 
 ## Danger Scale
 
@@ -212,7 +232,8 @@ src/
 ├── api/
 │   ├── avalanche-org.ts          # US forecast API client
 │   ├── observations.ts           # Observations API client
-│   └── avalanche-canada.ts       # Canada API client
+│   ├── avalanche-canada.ts       # Canada API client
+│   └── avalanche-quebec.ts       # Avalanche Québec bulletin scraper
 ├── lib/
 │   ├── html-to-text.ts           # HTML stripping for forecast text
 │   ├── zone-resolver.ts          # Zone name resolution + point-in-polygon
@@ -224,7 +245,8 @@ src/
     ├── get-center-info.ts        # Center detail
     ├── get-observations.ts       # Observation list + detail
     ├── check-warnings.ts         # Warning scanner
-    └── get-canada-forecast.ts    # Avalanche Canada forecasts
+    ├── get-canada-forecast.ts    # Avalanche Canada forecasts
+    └── get-quebec-forecast.ts    # Avalanche Québec (Chic-Chocs) forecast
 ```
 
 ## License

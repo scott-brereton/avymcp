@@ -223,6 +223,40 @@ export interface CanadaForecast {
   terrainAndTravelAdvice: string[];
 }
 
+export interface QuebecDangerDay {
+  day: string;
+  alpine: string;
+  treeline: string;
+  belowTreeline: string;
+}
+
+export interface QuebecProblem {
+  type: string;
+  elevations: string[];
+  aspects: string[];
+  likelihood: string | null;
+  size: { min: string; max: string } | null;
+  description: string;
+}
+
+export interface QuebecForecast {
+  language: "en" | "fr";
+  sourceUrl: string;
+  title: string;
+  highlights: string;
+  areas: string[];
+  dateIssued: string;
+  validUntil: string;
+  forecaster: string;
+  dangerDays: QuebecDangerDay[];
+  travelAdvice: string[];
+  problems: QuebecProblem[];
+  avalancheSummary: string;
+  snowpackSummary: string;
+  weatherSummary: string;
+  confidence: { rating: string; statements: string[] } | null;
+}
+
 export const DANGER_LABELS: Record<number, string> = {
   [-1]: "No Rating",
   0: "No Rating",

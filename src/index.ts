@@ -10,6 +10,7 @@ import {
 } from "./tools/get-observations.js";
 import { registerCheckWarnings } from "./tools/check-warnings.js";
 import { registerGetCanadaForecast } from "./tools/get-canada-forecast.js";
+import { registerGetQuebecForecast } from "./tools/get-quebec-forecast.js";
 
 function createServer(): McpServer {
   const server = new McpServer({
@@ -26,6 +27,7 @@ function createServer(): McpServer {
   registerGetObservationDetail(server);
   registerCheckWarnings(server);
   registerGetCanadaForecast(server);
+  registerGetQuebecForecast(server);
 
   return server;
 }
@@ -52,6 +54,7 @@ export default {
             "get_observation_detail",
             "check_warnings",
             "get_canada_forecast",
+            "get_quebec_forecast",
           ],
         }),
         {
